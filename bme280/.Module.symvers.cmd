@@ -1,0 +1,1 @@
+savedcmd_/home/trung/bme280-driver/bme280/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/trung/bme280-driver/bme280/Module.symvers -T /home/trung/bme280-driver/bme280/modules.order -i Module.symvers -e 

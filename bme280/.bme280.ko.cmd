@@ -1,0 +1,1 @@
+savedcmd_/home/trung/bme280-driver/bme280/bme280.ko := ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T arch/arm64/module.lds -o /home/trung/bme280-driver/bme280/bme280.ko /home/trung/bme280-driver/bme280/bme280.o /home/trung/bme280-driver/bme280/bme280.mod.o;  true

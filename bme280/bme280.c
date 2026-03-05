@@ -21,6 +21,11 @@ static struct i2c_client *bme280_i2c_client = NULL;
 #define SLAVE_DEVICE_NAME ("BME280") // device and driver name
 #define BME280_SLAVE_ADDRESS (0x76)  // i2c address
 
+#define BME280_IOCTL_MAGIC 'B'
+#define BME280_READ_TEMPERATURE _IOR(BME280_IOCTL_MAGIC, 1, char[32])
+#define BME280_READ_PRESSURE _IOR(BME280_IOCTL_MAGIC, 2, char[32])
+#define BME280_READ_HUMIDITY _IOR(BME280_IOCTL_MAGIC, 3, char[32])
+
 static struct i2c_driver bme280_i2c_driver = {
     .driver = {
         .name = SLAVE_DEVICE_NAME,
@@ -36,11 +41,10 @@ static struct cdev bme280_cdev;
 static int bme280_open(struct inode *device_file, struct file *instance);
 static int bme280_close(struct inode *device_file, struct file *instance);
 static ssize_t bme280_read(struct file *fptr, char __user *buf, size_t len, loff_t *off);
-
+static long bme280_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 #define CONCAT_BYTES(msb, lsb) (((uint16_t)msb << 8) | (uint16_t)lsb)
 
-// calibration registers, read at initialization
-// temperature calibration
+//Khai bao cac bien luu gia tri cac thanh ghi
 unsigned short dig_T1;
 signed short dig_T2;
 signed short dig_T3;
@@ -60,13 +64,10 @@ signed short dig_H4;
 signed short dig_H5;
 signed char dig_H6;
 
-// fine temperature, a global variable measured by read_temperature() and used
-// by read_pressure()
+// fine temperature
 long signed int t_fine;
 
-// Returns pressure in Q24.8 format, divide by 256 to obtain answer accurate to
-// 1 decimal place (e.g. 24674867/256=96386.2Pa)
-// See p25 of datasheet for calculation formula
+//Ham doc ap suat, chia 264 de lay gia tri chinh xac den 1 chu so (datasheet trang 25)
 long unsigned int read_pressure_int64(void){
   long long signed int var1, var2, p;
   long long unsigned int var4;
@@ -99,20 +100,18 @@ long unsigned int read_pressure_int64(void){
   return (long unsigned int)p;
 }
 
-// Returns temperature in Celsius with 0.01 resolution, e.g. 3001 -> 30.01degC
-// See p50 of datasheet for calculation formula
+//Ham doc nhiet do, tra ve gia tri chinh xac den 2 chu so phan thap phan (datasheet trang 50)
 long signed int read_temperature(void){
   int var1, var2;
   long signed int adc_T;
   long signed int T;
   long signed int d1, d2, d3;
 
-  // read temperature registers (see p31)
   d1 = i2c_smbus_read_byte_data(bme280_i2c_client, 0xFA);
   d2 = i2c_smbus_read_byte_data(bme280_i2c_client, 0xFB);
   d3 = i2c_smbus_read_byte_data(bme280_i2c_client, 0xFC);
   
-  // formula from datasheet page 25
+  // Cong thuc trang 25
   adc_T = ((d1 << 16) | (d2 << 8) | d3) >> 4;
 
   var1 = ((((adc_T >> 3) - (dig_T1 << 1))) * (dig_T2)) >> 11;
@@ -128,12 +127,11 @@ long signed int read_humidity(void){
   long signed int h1, h2;
   long signed int v_x1_u32r;
 
-  // read temperature registers (p31)
   h1 = (u8)(0xFF & i2c_smbus_read_byte_data(bme280_i2c_client, 0xFD));
   h2 = (u8)(0xFF & i2c_smbus_read_byte_data(bme280_i2c_client, 0xFE));
 
   adc_H = (h1 << 8) | h2;
-  // end of datasheet page 25
+  // Cong thuc trang 25
   v_x1_u32r = (t_fine - ((long signed int)76800));
   v_x1_u32r = (((((adc_H << 14) - (((long signed int)dig_H4) << 20) - (((s32)dig_H5) * v_x1_u32r)) + ((long signed int)16384)) >> 15) * (((((((v_x1_u32r *
               ((long signed int)dig_H6)) >> 10) * (((v_x1_u32r * ((s32)dig_H3)) >> 11) + ((long signed int)32768))) >> 10) + ((s32)2097152)) * ((s32)dig_H2) + 8192) >> 14));
@@ -144,7 +142,6 @@ long signed int read_humidity(void){
 }
 
 void read_calibration(void){
-  // read registers
   #define DATA1_LEN 24
   #define DATA1_START 0x88
   #define DATA2_LEN 8
@@ -177,12 +174,12 @@ void read_calibration(void){
     i++;
   }
 
-  // read calibration temperature registers (p. 24 of datasheet)
+  // Doc thanh ghi nhiet do
   dig_T1 = CONCAT_BYTES(reg_data1[1], reg_data1[0]);
   dig_T2 = CONCAT_BYTES(reg_data1[3], reg_data1[2]);
   dig_T3 = CONCAT_BYTES(reg_data1[5], reg_data1[4]);
 
-  // read calibration pressure registers (p. 24 of datasheet)
+  // Doc thanh ghi ap suat
   dig_P1 = CONCAT_BYTES(reg_data1[7], reg_data1[6]);
   dig_P2 = CONCAT_BYTES(reg_data1[9], reg_data1[8]);
   dig_P3 = CONCAT_BYTES(reg_data1[11], reg_data1[10]);
@@ -193,7 +190,7 @@ void read_calibration(void){
   dig_P8 = CONCAT_BYTES(reg_data1[21], reg_data1[20]);
   dig_P9 = CONCAT_BYTES(reg_data1[23], reg_data1[22]);
 
-  // read calibration humidity registers
+  // Doc thanh ghi do am
   dig_H1 = reg_data1[24];
   dig_H2 = CONCAT_BYTES(reg_data2[1], reg_data2[0]);
   dig_H3 = reg_data2[2];
@@ -212,7 +209,8 @@ static struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = bme280_open,
     .release = bme280_close,
-    .read = bme280_read
+    .read = bme280_read,
+    .unlocked_ioctl = bme280_ioctl
 };
 
 static int bme280_open(struct inode *device_file, struct file *instance){
@@ -257,6 +255,48 @@ static ssize_t bme280_read(struct file *fptr, char __user *buf, size_t len, loff
   copyRes = copy_to_user(buf, retStr, strlen(retStr));
   
   return strlen(retStr);
+}
+
+static long bme280_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+    long signed int temp, press64, hum;
+    char resultStr[32]; // Chuoi ket qua dinh dang
+    int copyRes;
+    long tempScaled, pressureScaled, humidityScaled;
+
+    // Doc du lieu tu cam bien
+    read_calibration();
+    temp = read_temperature();
+    press64 = read_pressure_int64();
+    hum = read_humidity();
+
+    // Xu ly lenh ioctl
+    switch (cmd) {
+        case BME280_READ_TEMPERATURE: {
+            tempScaled = temp; 
+            snprintf(resultStr, sizeof(resultStr), "%ld.%02ld", tempScaled / 100, tempScaled % 100);
+            copyRes = copy_to_user((char __user *)arg, resultStr, strlen(resultStr) + 1); 
+            if (copyRes != 0) return -EFAULT;
+            break;
+        }
+        case BME280_READ_PRESSURE: {
+            pressureScaled = press64; 
+            snprintf(resultStr, sizeof(resultStr), "%ld.%02ld", pressureScaled / 256, pressureScaled % 256);
+            copyRes = copy_to_user((char __user *)arg, resultStr, strlen(resultStr) + 1);
+            if (copyRes != 0) return -EFAULT;
+            break;
+        }
+        case BME280_READ_HUMIDITY: {
+            humidityScaled = hum; 
+            snprintf(resultStr, sizeof(resultStr), "%ld.%02ld", humidityScaled / 1024, humidityScaled % 1024);
+            copyRes = copy_to_user((char __user *)arg, resultStr, strlen(resultStr) + 1);
+            if (copyRes != 0) return -EFAULT;
+            break;
+        }
+        default:
+            return -EINVAL; 
+    }
+
+    return 0; 
 }
 
 static int init_driver(void){
@@ -310,7 +350,7 @@ static int init_driver(void){
     i2c_put_adapter(bme280_i2c_adapter);
   }
 
-  // read id, which is always 0x60 for bme280
+  // Doc id cua bme280 (0x60)
   id = i2c_smbus_read_byte_data(bme280_i2c_client, 0xD0);
 
   pr_info("id is 0x%x\n", id);
@@ -359,4 +399,4 @@ module_exit(exit_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Team 12");
-MODULE_DESCRIPTION("BME280 Raspberrypi Driver");
+MODULE_DESCRIPTION("BME280 Raspberrypi Driver 3+");
